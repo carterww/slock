@@ -1,10 +1,12 @@
 /* See LICENSE file for license details. */
+#include <cairo/cairo.h>
 #define _XOPEN_SOURCE 500
 #if HAVE_SHADOW_H
 #include <shadow.h>
 #endif
 
 #include <ctype.h>
+#include <cairo/cairo-xlib.h>
 #include <errno.h>
 #include <grp.h>
 #include <pwd.h>
@@ -18,7 +20,10 @@
 #include <X11/keysym.h>
 #include <X11/Xlib.h>
 #include <X11/Xutil.h>
+#include <Imlib2.h>
 
+#include <pthread.h>
+#include <time.h>
 #include "arg.h"
 #include "util.h"
 
@@ -33,8 +38,10 @@ enum {
 
 struct lock {
 	int screen;
+        XRRScreenResources *scr_res;
 	Window root, win;
 	Pixmap pmap;
+	Pixmap bgmap;
 	unsigned long colors[NUMCOLS];
 };
 
@@ -44,7 +51,18 @@ struct xrandr {
 	int errbase;
 };
 
+struct displayData{
+	struct lock **locks;
+	Display* dpy;
+	int nscreens;
+	cairo_t **crs;
+	cairo_surface_t **surfaces;
+};
+static pthread_mutex_t mutex= PTHREAD_MUTEX_INITIALIZER;
+
 #include "config.h"
+
+Imlib_Image image;
 
 static void
 die(const char *errstr, ...)
@@ -125,9 +143,56 @@ gethash(void)
 }
 
 static void
+refresh(Display *dpy, Window win , XRRScreenResources *scr, struct tm time, cairo_t* cr, cairo_surface_t* sfc)
+{/*Function that displays given time on the given screen*/
+	static char tm[30]="";
+        cairo_text_extents_t extents;
+
+        int hr = time.tm_hour % 12;
+        if (hr == 0)
+            hr = 12;
+	sprintf(tm,"%d/%2d/%02d %d:%02d",time.tm_mon,time.tm_mday,time.tm_year-100,hr,time.tm_min);
+	XClearWindow(dpy, win);
+	cairo_select_font_face(cr, "BlexMono Nerd Font", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 64.0);
+        cairo_text_extents(cr, tm, &extents);
+
+        XRRCrtcInfo *crtc_info;
+        crtc_info = XRRGetCrtcInfo(dpy, scr, scr->crtcs[0]);
+
+        int xpos,ypos;
+        xpos=crtc_info->width/2 - (int)extents.width/2;
+        ypos=crtc_info->height/4;
+	cairo_move_to(cr, xpos, ypos);
+	cairo_show_text(cr, tm);
+	cairo_surface_flush(sfc);
+	XFlush(dpy);
+}
+
+static void*
+displayTime(void* input)
+{ /*Thread that keeps track of time and refreshes it every UPDATE_TIME_INTERVAL seconds */
+    struct displayData* displayData=(struct displayData*)input;
+    while (1){
+        pthread_mutex_lock(&mutex); /*Mutex to prevent interference with refreshing screen while typing password*/
+        time_t rawtime;
+        time(&rawtime);
+        struct tm tm = *localtime(&rawtime);
+        for (int k=0;k<displayData->nscreens;k++){
+                cairo_t *cr = displayData->crs[k];
+                cairo_set_source_rgb(cr, txtcolor[INIT][0], txtcolor[INIT][1], txtcolor[INIT][2]);
+                //cairo_set_source_rgb(cr, txtcolor[INIT][0], txtcolor[INIT][1], txtcolor[INIT][2]);
+                refresh(displayData->dpy, displayData->locks[k]->win, displayData->locks[k]->scr_res, tm,cr,displayData->surfaces[k]);
+                }
+        pthread_mutex_unlock(&mutex);
+        sleep(UPDATE_TIME_INTERVAL);
+    }
+    return NULL;
+}
+
+static void
 readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
-       const char *hash)
-{
+        const char *hash,cairo_t **crs,cairo_surface_t **surfaces) {
 	XRRScreenChangeNotifyEvent *rre;
 	char buf[32], passwd[256], *inputhash;
 	int num, screen, running, failure, oldc;
@@ -189,16 +254,27 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 			}
 			color = len ? INPUT : ((failure || failonclear) ? FAILED : INIT);
 			if (running && oldc != color) {
+                                pthread_mutex_lock(&mutex); /*Stop the time refresh thread from interfering*/
 				for (screen = 0; screen < nscreens; screen++) {
-					XSetWindowBackground(dpy,
-					                     locks[screen]->win,
-					                     locks[screen]->colors[color]);
+                    if(locks[screen]->bgmap)
+                        XSetWindowBackgroundPixmap(dpy, locks[screen]->win, locks[screen]->bgmap);
+                    else
+                        XSetWindowBackground(dpy, locks[screen]->win, locks[screen]->colors[0]);
 					XClearWindow(dpy, locks[screen]->win);
+                     time_t rawtime;
+                     time(&rawtime);
+                     cairo_t *cr = crs[screen];
+                     cairo_set_source_rgb(cr, txtcolor[color][0], txtcolor[color][1], txtcolor[color][2]);
+	             refresh(dpy, locks[screen]->win,locks[screen]->scr_res, *localtime(&rawtime),cr,surfaces[screen]);
+                     
+					/*Redraw the time after screen cleared*/
 				}
+                                pthread_mutex_unlock(&mutex);
 				oldc = color;
 			}
 		} else if (rr->active && ev.type == rr->evbase + RRScreenChangeNotify) {
 			rre = (XRRScreenChangeNotifyEvent*)&ev;
+                        pthread_mutex_lock(&mutex); /*Stop the time refresh thread from interfering*/
 			for (screen = 0; screen < nscreens; screen++) {
 				if (locks[screen]->win == rre->window) {
 					if (rre->rotation == RR_Rotate_90 ||
@@ -212,6 +288,7 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 					break;
 				}
 			}
+                        pthread_mutex_unlock(&mutex);
 		} else {
 			for (screen = 0; screen < nscreens; screen++)
 				XRaiseWindow(dpy, locks[screen]->win);
@@ -234,7 +311,19 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 
 	lock->screen = screen;
 	lock->root = RootWindow(dpy, lock->screen);
+        lock->scr_res = XRRGetScreenResources(dpy, lock->root);
 
+    if(image) 
+    {
+        lock->bgmap = XCreatePixmap(dpy, lock->root, DisplayWidth(dpy, lock->screen), DisplayHeight(dpy, lock->screen), DefaultDepth(dpy, lock->screen));
+        imlib_context_set_image(image);
+        imlib_context_set_display(dpy);
+        imlib_context_set_visual(DefaultVisual(dpy, lock->screen));
+        imlib_context_set_colormap(DefaultColormap(dpy, lock->screen));
+        imlib_context_set_drawable(lock->bgmap);
+        imlib_render_image_on_drawable(0, 0);
+        imlib_free_image();
+    }
 	for (i = 0; i < NUMCOLS; i++) {
 		XAllocNamedColor(dpy, DefaultColormap(dpy, lock->screen),
 		                 colorname[i], &color, &dummy);
@@ -251,6 +340,8 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 	                          CopyFromParent,
 	                          DefaultVisual(dpy, lock->screen),
 	                          CWOverrideRedirect | CWBackPixel, &wa);
+    if(lock->bgmap)
+        XSetWindowBackgroundPixmap(dpy, lock->win, lock->bgmap);
 	lock->pmap = XCreateBitmapFromData(dpy, lock->win, curs, 8, 8);
 	invisible = XCreatePixmapCursor(dpy, lock->pmap, lock->pmap,
 	                                &color, &color, 0, 0);
@@ -344,6 +435,7 @@ main(int argc, char **argv) {
 	if (!crypt("", hash))
 		die("slock: crypt: %s\n", strerror(errno));
 
+        XInitThreads();
 	if (!(dpy = XOpenDisplay(NULL)))
 		die("slock: cannot open display\n");
 
@@ -355,6 +447,60 @@ main(int argc, char **argv) {
 	if (setuid(duid) < 0)
 		die("slock: setuid: %s\n", strerror(errno));
 
+	/*Create screenshot Image*/
+	Screen *scr = ScreenOfDisplay(dpy, DefaultScreen(dpy));
+	image = imlib_create_image(scr->width,scr->height);
+	imlib_context_set_image(image);
+	imlib_context_set_display(dpy);
+	imlib_context_set_visual(DefaultVisual(dpy,0));
+	imlib_context_set_drawable(RootWindow(dpy,XScreenNumberOfScreen(scr)));	
+	imlib_copy_drawable_to_image(0,0,0,scr->width,scr->height,0,0,1);
+
+#ifdef BLUR
+
+	/*Blur function*/
+	imlib_image_blur(blurRadius);
+#endif // BLUR	
+
+#ifdef PIXELATION
+	/*Pixelation*/
+	int width = scr->width;
+	int height = scr->height;
+	
+	for(int y = 0; y < height; y += pixelSize)
+	{
+		for(int x = 0; x < width; x += pixelSize)
+		{
+			int red = 0;
+			int green = 0;
+			int blue = 0;
+
+			Imlib_Color pixel; 
+			Imlib_Color* pp;
+			pp = &pixel;
+			for(int j = 0; j < pixelSize && j < height; j++)
+			{
+				for(int i = 0; i < pixelSize && i < width; i++)
+				{
+					imlib_image_query_pixel(x+i,y+j,pp);
+					red += pixel.red;
+					green += pixel.green;
+					blue += pixel.blue;
+				}
+			}
+			red /= (pixelSize*pixelSize);
+			green /= (pixelSize*pixelSize);
+			blue /= (pixelSize*pixelSize);
+			imlib_context_set_color(red,green,blue,pixel.alpha);
+			imlib_image_fill_rectangle(x,y,pixelSize,pixelSize);
+			red = 0;
+			green = 0;
+			blue = 0;
+		}
+	}
+	
+	
+#endif
 	/* check for Xrandr support */
 	rr.active = XRRQueryExtension(dpy, &rr.evbase, &rr.errbase);
 
@@ -389,7 +535,32 @@ main(int argc, char **argv) {
 	}
 
 	/* everything is now blank. Wait for the correct password */
-	readpw(dpy, &rr, locks, nscreens, hash);
-
+	pthread_t thredid;
+    /* Create Cairo drawables upon which the time will be shown. */
+    struct displayData displayData;
+	cairo_surface_t **surfaces;
+	cairo_t **crs;
+    if (!(surfaces=calloc(nscreens, sizeof(cairo_surface_t*)))){
+		die("Out of memory");
+	}
+	if (!(crs=calloc(nscreens, sizeof(cairo_t*)))){
+		die("Out of memory");
+	}
+	for (int k=0;k<nscreens;k++){
+		Drawable win=locks[k]->win;
+		int screen=locks[k]->screen;
+		XMapWindow(dpy, win);
+		surfaces[k]=cairo_xlib_surface_create(dpy, win, DefaultVisual(dpy, screen),DisplayWidth(dpy, screen) , DisplayHeight(dpy, screen));
+		crs[k]=cairo_create(surfaces[k]);
+	}
+	displayData.dpy=dpy;
+	displayData.locks=locks;
+	displayData.nscreens=nscreens;
+	displayData.crs=crs;
+	displayData.surfaces=surfaces;
+    /*Start the thread that redraws time every UPDATE_TIME_INTERVAL seconds*/
+	pthread_create(&thredid, NULL, displayTime, &displayData);
+	/*Wait for the password*/
+	readpw(dpy, &rr, locks, nscreens, hash,crs,surfaces);
 	return 0;
 }
