@@ -1,6 +1,7 @@
 /* user and group to drop privileges to */
 static const char *user  = "nobody";
 static const char *group = "nobody";
+static char font[64] = "BlexMono Nerd Font";
 
 static const unsigned char txtcolor[3][NUMCOLS] = {
         [INIT] = { 255, 255, 255 },
@@ -20,10 +21,10 @@ static const int failonclear = 0;
 /*Enable blur*/
 #define BLUR
 /*Set blur radius*/
-static const int blurRadius=10;
+static int blurRadius=8;
 /*Enable Pixelation*/
 //#define PIXELATION
 /*Set pixelation radius*/
 static const int pixelSize=0;
 
-#define UPDATE_TIME_INTERVAL 15
+#define UPDATE_TIME_INTERVAL 5

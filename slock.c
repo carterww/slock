@@ -146,25 +146,39 @@ static void
 refresh(Display *dpy, Window win , XRRScreenResources *scr, struct tm time, cairo_t* cr, cairo_surface_t* sfc)
 {/*Function that displays given time on the given screen*/
 	static char tm[30]="";
-        cairo_text_extents_t extents;
-
-        int hr = time.tm_hour % 12;
-        if (hr == 0)
-            hr = 12;
-	sprintf(tm,"%d/%2d/%02d %d:%02d",time.tm_mon,time.tm_mday,time.tm_year-100,hr,time.tm_min);
-	XClearWindow(dpy, win);
-	cairo_select_font_face(cr, "BlexMono Nerd Font", CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
-        cairo_set_font_size(cr, 64.0);
-        cairo_text_extents(cr, tm, &extents);
+        static char ampm[3]="AM";
 
         XRRCrtcInfo *crtc_info;
-        crtc_info = XRRGetCrtcInfo(dpy, scr, scr->crtcs[0]);
+        cairo_text_extents_t extents;
+        int hr;
+        int xpos, ypos, off_x, off_y, total_width = 0;
 
-        int xpos,ypos;
-        xpos=crtc_info->width/2 - (int)extents.width/2;
-        ypos=crtc_info->height/4;
-	cairo_move_to(cr, xpos, ypos);
-	cairo_show_text(cr, tm);
+        hr = time.tm_hour % 12;
+        ampm[0] = time.tm_hour < 12 ? 'A' : 'P';
+        if (hr == 0)
+            hr = 12;
+	sprintf(tm,"%d/%2d/%02d %d:%02d %s",time.tm_mon,time.tm_mday,time.tm_year-100,hr,time.tm_min, ampm);
+	XClearWindow(dpy, win);
+	cairo_select_font_face(cr, font, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
+        cairo_set_font_size(cr, 64.0);
+        cairo_text_extents(cr, tm, &extents);
+        off_x = - (int)extents.width/2;
+        off_y = - (int)extents.height/2;
+
+        for (int i=0;i<scr->ncrtc;i++) {
+          crtc_info = XRRGetCrtcInfo(dpy, scr, scr->crtcs[i]);
+          if (!crtc_info->width) {
+            goto free_crtc;
+          }
+          xpos=crtc_info->width/2 + off_x + total_width;
+          ypos=crtc_info->height/5 + off_y;
+          total_width+=crtc_info->width;
+          cairo_move_to(cr, xpos, ypos);
+          cairo_show_text(cr, tm);
+free_crtc:
+          XRRFreeCrtcInfo(crtc_info);
+        }
+
 	cairo_surface_flush(sfc);
 	XFlush(dpy);
 }
@@ -256,44 +270,44 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 			if (running && oldc != color) {
                                 pthread_mutex_lock(&mutex); /*Stop the time refresh thread from interfering*/
 				for (screen = 0; screen < nscreens; screen++) {
-                    if(locks[screen]->bgmap)
-                        XSetWindowBackgroundPixmap(dpy, locks[screen]->win, locks[screen]->bgmap);
-                    else
-                        XSetWindowBackground(dpy, locks[screen]->win, locks[screen]->colors[0]);
-					XClearWindow(dpy, locks[screen]->win);
-                     time_t rawtime;
-                     time(&rawtime);
-                     cairo_t *cr = crs[screen];
-                     cairo_set_source_rgb(cr, txtcolor[color][0], txtcolor[color][1], txtcolor[color][2]);
-	             refresh(dpy, locks[screen]->win,locks[screen]->scr_res, *localtime(&rawtime),cr,surfaces[screen]);
-                     
-					/*Redraw the time after screen cleared*/
+                                        if(locks[screen]->bgmap)
+                                                XSetWindowBackgroundPixmap(dpy, locks[screen]->win, locks[screen]->bgmap);
+                                        else
+                                                XSetWindowBackground(dpy, locks[screen]->win, locks[screen]->colors[0]);
+                                        XClearWindow(dpy, locks[screen]->win);
+                                        time_t rawtime;
+                                        time(&rawtime);
+                                        cairo_t *cr = crs[screen];
+                                        cairo_set_source_rgb(cr, txtcolor[color][0], txtcolor[color][1], txtcolor[color][2]);
+                                        refresh(dpy, locks[screen]->win,locks[screen]->scr_res, *localtime(&rawtime),cr,surfaces[screen]);
+
+                                        /*Redraw the time after screen cleared*/
 				}
                                 pthread_mutex_unlock(&mutex);
 				oldc = color;
 			}
-		} else if (rr->active && ev.type == rr->evbase + RRScreenChangeNotify) {
-			rre = (XRRScreenChangeNotifyEvent*)&ev;
+                } else if (rr->active && ev.type == rr->evbase + RRScreenChangeNotify) {
+                        rre = (XRRScreenChangeNotifyEvent*)&ev;
                         pthread_mutex_lock(&mutex); /*Stop the time refresh thread from interfering*/
-			for (screen = 0; screen < nscreens; screen++) {
-				if (locks[screen]->win == rre->window) {
-					if (rre->rotation == RR_Rotate_90 ||
-					    rre->rotation == RR_Rotate_270)
-						XResizeWindow(dpy, locks[screen]->win,
-						              rre->height, rre->width);
-					else
-						XResizeWindow(dpy, locks[screen]->win,
-						              rre->width, rre->height);
-					XClearWindow(dpy, locks[screen]->win);
-					break;
-				}
-			}
+                        for (screen = 0; screen < nscreens; screen++) {
+                                if (locks[screen]->win == rre->window) {
+                                        if (rre->rotation == RR_Rotate_90 ||
+                                                        rre->rotation == RR_Rotate_270)
+                                                XResizeWindow(dpy, locks[screen]->win,
+                                                                rre->height, rre->width);
+                                        else
+                                                XResizeWindow(dpy, locks[screen]->win,
+                                                                rre->width, rre->height);
+                                        XClearWindow(dpy, locks[screen]->win);
+                                        break;
+                                }
+                        }
                         pthread_mutex_unlock(&mutex);
-		} else {
-			for (screen = 0; screen < nscreens; screen++)
-				XRaiseWindow(dpy, locks[screen]->win);
-		}
-	}
+                } else {
+                        for (screen = 0; screen < nscreens; screen++)
+                                XRaiseWindow(dpy, locks[screen]->win);
+                }
+        }
 }
 
 static struct lock *
@@ -391,7 +405,7 @@ lockscreen(Display *dpy, struct xrandr *rr, int screen)
 static void
 usage(void)
 {
-	die("usage: slock [-v] [cmd [arg ...]]\n");
+	die("usage: slock [-v] [cmd [arg ...]] [-f] [font name]\n");
 }
 
 int
@@ -410,6 +424,12 @@ main(int argc, char **argv) {
 	case 'v':
 		puts("slock-"VERSION);
 		return 0;
+        case 'f':
+                strncpy(font, *(++argv), sizeof(font) - 1);
+                break;
+        case 'b':
+                blurRadius = atoi(*(++argv));
+                break;
 	default:
 		usage();
 	} ARGEND
