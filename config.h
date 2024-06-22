@@ -1,7 +1,7 @@
 /* user and group to drop privileges to */
 static const char *user  = "nobody";
 static const char *group = "nobody";
-static char font[64] = "BlexMono Nerd Font";
+static char font[64] = "RobotoMono Nerd Font";
 
 static const unsigned char txtcolor[3][NUMCOLS] = {
         [INIT] = { 255, 255, 255 },
