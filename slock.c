@@ -556,29 +556,29 @@ main(int argc, char **argv) {
 
 	/* everything is now blank. Wait for the correct password */
 	pthread_t thredid;
-    /* Create Cairo drawables upon which the time will be shown. */
-    struct displayData displayData;
-	cairo_surface_t **surfaces;
-	cairo_t **crs;
-    if (!(surfaces=calloc(nscreens, sizeof(cairo_surface_t*)))){
-		die("Out of memory");
-	}
-	if (!(crs=calloc(nscreens, sizeof(cairo_t*)))){
-		die("Out of memory");
-	}
-	for (int k=0;k<nscreens;k++){
-		Drawable win=locks[k]->win;
-		int screen=locks[k]->screen;
-		XMapWindow(dpy, win);
-		surfaces[k]=cairo_xlib_surface_create(dpy, win, DefaultVisual(dpy, screen),DisplayWidth(dpy, screen) , DisplayHeight(dpy, screen));
-		crs[k]=cairo_create(surfaces[k]);
-	}
-	displayData.dpy=dpy;
-	displayData.locks=locks;
-	displayData.nscreens=nscreens;
-	displayData.crs=crs;
-	displayData.surfaces=surfaces;
-    /*Start the thread that redraws time every UPDATE_TIME_INTERVAL seconds*/
+        /* Create Cairo drawables upon which the time will be shown. */
+        struct displayData displayData;
+            cairo_surface_t **surfaces;
+            cairo_t **crs;
+        if (!(surfaces=calloc(nscreens, sizeof(cairo_surface_t*)))){
+            	die("Out of memory");
+            }
+            if (!(crs=calloc(nscreens, sizeof(cairo_t*)))){
+            	die("Out of memory");
+            }
+            for (int k=0;k<nscreens;k++){
+            	Drawable win=locks[k]->win;
+            	int screen=locks[k]->screen;
+            	XMapWindow(dpy, win);
+            	surfaces[k]=cairo_xlib_surface_create(dpy, win, DefaultVisual(dpy, screen),DisplayWidth(dpy, screen) , DisplayHeight(dpy, screen));
+            	crs[k]=cairo_create(surfaces[k]);
+            }
+            displayData.dpy=dpy;
+            displayData.locks=locks;
+            displayData.nscreens=nscreens;
+            displayData.crs=crs;
+            displayData.surfaces=surfaces;
+        /*Start the thread that redraws time every UPDATE_TIME_INTERVAL seconds*/
 	pthread_create(&thredid, NULL, displayTime, &displayData);
 	/*Wait for the password*/
 	readpw(dpy, &rr, locks, nscreens, hash,crs,surfaces);
