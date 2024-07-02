@@ -36,6 +36,8 @@ enum {
 	NUMCOLS
 };
 
+int color = INIT;
+
 struct lock {
 	int screen;
         XRRScreenResources *scr_res;
@@ -192,12 +194,11 @@ displayTime(void* input)
         time_t rawtime;
         time(&rawtime);
         struct tm tm = *localtime(&rawtime);
-        for (int k=0;k<displayData->nscreens;k++){
+        for (int k=0;k<displayData->nscreens;k++) {
                 cairo_t *cr = displayData->crs[k];
-                cairo_set_source_rgb(cr, txtcolor[INIT][0], txtcolor[INIT][1], txtcolor[INIT][2]);
-                //cairo_set_source_rgb(cr, txtcolor[INIT][0], txtcolor[INIT][1], txtcolor[INIT][2]);
+                cairo_set_source_rgb(cr, txtcolor[color][0], txtcolor[color][1], txtcolor[color][2]);
                 refresh(displayData->dpy, displayData->locks[k]->win, displayData->locks[k]->scr_res, tm,cr,displayData->surfaces[k]);
-                }
+        }
         pthread_mutex_unlock(&mutex);
         sleep(UPDATE_TIME_INTERVAL);
     }
@@ -210,14 +211,14 @@ readpw(Display *dpy, struct xrandr *rr, struct lock **locks, int nscreens,
 	XRRScreenChangeNotifyEvent *rre;
 	char buf[32], passwd[256], *inputhash;
 	int num, screen, running, failure, oldc;
-	unsigned int len, color;
+	unsigned int len;
 	KeySym ksym;
 	XEvent ev;
 
 	len = 0;
 	running = 1;
 	failure = 0;
-	oldc = INIT;
+	oldc = color;
 
 	while (running && !XNextEvent(dpy, &ev)) {
 		if (ev.type == KeyPress) {
