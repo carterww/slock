@@ -159,7 +159,7 @@ refresh(Display *dpy, Window win , XRRScreenResources *scr, struct tm time, cair
         ampm[0] = time.tm_hour < 12 ? 'A' : 'P';
         if (hr == 0)
             hr = 12;
-	sprintf(tm,"%d/%d/%02d %d:%02d %s",time.tm_mon,time.tm_mday,time.tm_year-100,hr,time.tm_min, ampm);
+	sprintf(tm,"%d/%d/%02d %d:%02d %s",time.tm_mon+1,time.tm_mday,time.tm_year-100,hr,time.tm_min, ampm);
 	XClearWindow(dpy, win);
 	cairo_select_font_face(cr, font, CAIRO_FONT_SLANT_NORMAL, CAIRO_FONT_WEIGHT_BOLD);
         cairo_set_font_size(cr, 64.0);
